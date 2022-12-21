@@ -7,6 +7,7 @@ import time
 import datetime
 import os
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
@@ -19,7 +20,7 @@ tip_multiplier = config.tip_multiplier
 initial_profit_margin_usd = config.initial_profit_margin_usd
 max_retip_count = config.max_retip_count
 
-last_report_time = 0
+# last_report_time = 0
 
 
 # setup provider
@@ -98,7 +99,7 @@ def get_seconds_until_next_interval(interval):
     return int(seconds_until_next_interval)
 
 # function for getting required tip
-def get_required_tip(try_count):
+async def get_required_tip(try_count):
     (gas_cost_trb, trb_price) = get_gas_cost_in_oracle_token()
 
     # handle api errors with limited retries
@@ -106,7 +107,7 @@ def get_required_tip(try_count):
     api_try_count = 1
     while trb_price == 0.0 and api_try_count < api_max_tries:
         print("trb price is 0, trying again in 10 seconds")
-        time.sleep(2 * api_try_count)
+        await asyncio.sleep(5 * api_try_count)
         (gas_cost_trb, trb_price) = get_gas_cost_in_oracle_token()
         api_try_count += 1
 
@@ -122,16 +123,15 @@ def get_required_tip(try_count):
     return required_tip
 
 
-def get_last_report_time(query_id):
+async def get_last_report_time(query_id):
     current_time = datetime.datetime.now()
     print("current time: ", current_time.timestamp())
     try:
         data_before = oracle_contract.functions.getDataBefore(
             query_id, int(current_time.timestamp())).call()
-        last_report_time
-        last_report_time = int(data_before[2])
-        print("last report time: ", last_report_time)
-        return last_report_time
+        # last_report_time = int(data_before[2])
+        print("last report time: ", data_before[2])
+        return data_before[2]
     except:
         print("error getting data before")
         return 0
@@ -175,9 +175,9 @@ def tip(amount_to_tip, query_id, query_data):
     web3.eth.waitForTransactionReceipt(tx_hash)
 
 
-def initiate_tipping_sequence(retip_count, query_id, query_data):
+async def initiate_tipping_sequence(retip_count, query_id, query_data, last_report_time):
     # calculate required tip
-    required_tip = get_required_tip(retip_count)
+    required_tip = await get_required_tip(retip_count)
     print("required tip: ", required_tip)
 
     if required_tip == 0.0:
@@ -208,7 +208,7 @@ def initiate_tipping_sequence(retip_count, query_id, query_data):
 
         # wait 20 seconds
         print("sleeping...")
-        time.sleep(config.retip_delay)
+        await asyncio.sleep(config.retip_delay)
 
         # call getDataBefore function
         current_time = datetime.datetime.now()
@@ -226,7 +226,7 @@ def initiate_tipping_sequence(retip_count, query_id, query_data):
                 # initiate tipping sequence again
                 print("try count ", retip_count,
                     " is less than max try count ", max_retip_count)
-                initiate_tipping_sequence(retip_count + 1, query_id, query_data)
+                await initiate_tipping_sequence(retip_count + 1, query_id, query_data, last_report_time)
         else:
             print("new data reported")
 
@@ -263,29 +263,42 @@ def approve_token():
         # wait for transaction to be mined
         web3.eth.wait_for_transaction_receipt(tx_hash)
 
+    return None
 
-def main():
-    query_id = config.query_id
-    query_data = config.query_data
-    interval = config.interval
-
-    approve_token()
+async def tip_at_interval(query_id, query_data, interval):
+    print("query id in tip at interval: ", query_id)
     while True:
-        last_report_time = get_last_report_time(query_id=query_id)
+        last_report_time = await get_last_report_time(query_id=query_id)
         seconds_until_next_interval = get_seconds_until_next_interval(interval=interval)
         current_timestamp = datetime.datetime.now().timestamp()
         if seconds_until_next_interval < 60 and int(last_report_time) < int(current_timestamp) - int(interval / 10):
             # initiate tipping sequence
             print("\ninitiating tipping sequence")
-            initiate_tipping_sequence(retip_count=0, query_id=query_id, query_data=query_data)
+            await initiate_tipping_sequence(retip_count=0, query_id=query_id, query_data=query_data, last_report_time=last_report_time)
         else:
             approve_token()
             # sleep until next interval
             print("sleeping until next interval")
-            time.sleep(seconds_until_next_interval / 2)
+            await asyncio.sleep(seconds_until_next_interval / 2)
 
-    return None
+async def schedule_tasks():
+    queries = config.queries
+    tasks = []
 
+    approve_token()
 
-if __name__ == "__main__":
-    main()
+    for query in queries:
+        query_id = query['query_id']
+        print("query id: ", query_id)
+        query_data = query['query_data']
+        interval = query['interval']
+        task = asyncio.create_task(await tip_at_interval(query_id, query_data, interval))
+        tasks.append(task)
+    
+    await asyncio.gather(*tasks)
+
+def main():
+    asyncio.run(schedule_tasks())
+
+# asyncio.run(main())
+
