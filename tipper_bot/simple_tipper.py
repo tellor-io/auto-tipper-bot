@@ -11,6 +11,9 @@ import logging
 
 load_dotenv()
 
+if not os.path.exists('logs'):
+    os.makedirs('logs')
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename='logs/tipper.log', filemode='a')
 
 # Create a logger object
@@ -66,7 +69,7 @@ oracle_token_contract = web3.eth.contract(
     address=config.oracle_token_address, abi=abi)
 
 # import autopay abi
-with open("abis/AutoPay.json") as f:
+with open("abis/Autopay.json") as f:
     abi = json.load(f)
 
 autopay_contract = web3.eth.contract(address=config.autopay_address, abi=abi)
